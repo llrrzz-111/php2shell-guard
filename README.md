@@ -1,243 +1,149 @@
-# php2shell-guard
+php2shell-guard
 
-> **PHP2Shell（CVE-2026-109618 / CVE-2026-109619）一键检测与修复脚本**
->
-> Linux / Windows / macOS 通用 · 单文件 · 零依赖（只用 Python 3 标准库）
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
-2026 年 10 月，PHP 官方发布 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35，修复两处 CVSS v4.0 均为 9.2 的核心引擎漏洞（社区称 php2shell）。漏洞位于 PHP 解释器本身，触发发生在请求启动阶段，**任何由未修复 PHP 处理、接受 POST 的站点都在受影响范围内**，与业务代码是否使用 session 无关。
+PHP2Shell（CVE-2026-109618 / CVE-2026-109619）检测与加固工具。
 
-手动排查麻烦在哪：
+单文件、零依赖（仅 Python 3 标准库），支持宿主机与 Docker 容器内的 PHP 实例。
 
-- 服务器不止一台，每台都要 `php -v` / `php -i`
-- 命令行版本和 Web 进程实际加载的版本经常不一致
-- 容器里的 PHP 不在宿主机上
-- **光看版本号不准** —— 发行版 backport 可能不改版本号
-- 查出来还要改配置、升包、重启
+## 特性
 
-这个脚本把「查」和「修」串成一条命令。
-
----
+- **检测**：版本、补丁标志、风险配置项
+- **容器支持**：自动发现并进入 Docker 容器检测
+- **配置加固**：修改 `php.ini`，改动前自动备份
+- **版本升级**：按平台生成升级命令；容器场景支持自动改写 compose 并重建
+- **CI 友好**：支持 JSON 输出与退出码判定
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/<你的用户名>/php2shell-guard.git
+git clone https://github.com/llrrzz-111/php2shell-guard.git
 cd php2shell-guard
 
-# 只检测，不改任何东西
+# 仅检测（不做任何修改）
 python3 php2shell_guard.py --scan
 
-# 交互模式（要修的时候用）
+# 交互模式（检测 + 处置）
 python3 php2shell_guard.py
 ```
 
-Windows 上用 `python` 代替 `python3`；改配置需要**以管理员身份运行 PowerShell**。
+Windows 使用 `python` 替代 `python3`；修改配置需以管理员身份运行 PowerShell。
 
----
+## 用法
 
-## 它能做什么
+```
+python3 php2shell_guard.py [OPTIONS]
 
-| 能力 | 说明 |
-|---|---|
-| **检测** | 找出 PHP 在哪、什么版本、有没有打补丁、配置有没有风险 |
-| **容器检测** | 宿主机没有 PHP 也行 —— 自动进 Docker 容器里查 |
-| **配置加固** | 改 `php.ini`，**改前自动备份**，可回滚 |
-| **版本升级** | 按平台生成命令；容器场景可**全自动**改 compose + 重建 + 验证 |
-| **复检** | 改完/升完重新检测，对比前后 |
+OPTIONS:
+  --scan              仅检测，不进入处置流程
+  --json              输出 JSON 到标准输出
+  --json-out <PATH>   输出 JSON 到文件（UTF-8，无 BOM）
+  --php <PATH>        指定宿主机 php 可执行文件路径
+  --no-docker         跳过 Docker 容器检测
+  --yes-i-know        跳过免责确认（CI 用，仍不会自动修改）
+```
 
-**默认只检测，不改任何东西。**
+退出码：
 
----
+| 码  | 含义                |
+| --- | ------------------- |
+| 0   | 全部已修复          |
+| 1   | 检测到风险          |
+| 2   | 未找到任何 PHP 实例 |
 
-## 检测什么
+## 检测项
 
-### 1. 版本
+### 版本
 
 | 分支 | 修复版本 |
-|---|---|
-| 8.2 | **8.2.35** |
-| 8.3 | **8.3.36** |
-| 8.4 | **8.4.27** |
-| 8.5 | **8.5.12** |
+| ---- | -------- |
+| 8.2  | 8.2.35   |
+| 8.3  | 8.3.36   |
+| 8.4  | 8.4.27   |
+| 8.5  | 8.5.12   |
 
-判定四类：**存在风险** / **已修复** / **已停止支持**（5.x、7.x、8.0、8.1）/ **无法确定**。
+判定结果：`vulnerable` / `safe` / `eol`（5.x、7.x、8.0、8.1）/ `unknown`。
 
-### 2. 补丁标志（比版本号可靠）
+### 补丁标志
 
 ```bash
 php -r 'var_dump(ini_get("memory_hard_limit_percent"));'
 ```
 
-- `bool(false)` → **未包含本次修复**
-- `string(0) ""` → 已包含
+| 返回值         | 含义           |
+| -------------- | -------------- |
+| `bool(false)`  | 未包含本次修复 |
+| `string(0) ""` | 已包含修复     |
 
-**为什么要看这个**：发行版 backport 可能不改版本号（如 `8.2.34-1ubuntu0.3`），但会带上这个 INI。只看版本字符串会误判。
+该判据优于版本号比较：发行版 backport 可能保持原版本号（如 `8.2.34-1ubuntu0.3`）而实际已修复。
 
-### 3. 配置项
+### 配置项
 
-| 配置 | 风险 | 建议 |
-|---|---|---|
-| `session.upload_progress.enabled = On` | 中 | 不用进度条就关掉 |
-| `session.use_strict_mode = 0` | 中 | 改成 1 |
-| `display_errors = On` | 低 | 生产环境关掉 |
+| 配置项                            | 建议值                      |
+| --------------------------------- | --------------------------- |
+| `session.upload_progress.enabled` | `Off`（不使用上传进度条时） |
+| `session.use_strict_mode`         | `1`                         |
+| `display_errors`                  | `Off`（生产环境）           |
 
-### 4. Docker 容器
+### Docker
 
-宿主机没有 `php` 命令也没关系：
+宿主机未安装 PHP 时，仍会扫描运行中的 PHP 容器：
 
 ```bash
 docker exec <容器名> php -v
 docker exec <容器名> php -r 'var_dump(ini_get("memory_hard_limit_percent"));'
 ```
 
-输出会分两段展示：
+## 处置
 
-```
-============================================================
- 宿主机 PHP
-============================================================
-[!] 未检测到
-
-============================================================
- Docker 容器内的 PHP
-============================================================
-[+] php2shell-fpm  (php:8.2.34-fpm)
-    【存在风险】版本 8.2.34 < 修复版本 8.2.35
-    补丁标志 memory_hard_limit_percent = (不存在)
-```
-
----
-
-## 处置流程
-
-扫描后列出需要处理的目标：
-
-```
-============================================================
- 处置
-============================================================
-  [1] php2shell-fpm（容器）：8.2.34 vulnerable
-  [2] php2shell-apache（容器）：8.2.34 vulnerable
-  [0] 不做任何修改
-```
-
-选中后选动作：
-
-```
-对 php2shell-fpm 执行：
-  [1] 配置加固（关 upload_progress + 开 strict_mode）
-  [2] 版本升级
-  [3] 取消
-```
+`--scan` 之后的交互模式提供三个动作：
 
 ### 配置加固
 
-改 `php.ini` 两项，**改前备份**：
+写入 `php.ini`：
 
-```
-将修改：
-  session.upload_progress.enabled     → Off
-  session.use_strict_mode             → 1
-
-文件：/etc/php/8.2/fpm/php.ini
-修改前自动备份
-
-确认应用？ [y/N]:
+```ini
+session.upload_progress.enabled = Off
+session.use_strict_mode = 1
 ```
 
-**改完不会替你重启** —— 重启是业务影响动作，什么时候做由你决定。
+修改前自动备份为 `php.ini.bak.<时间戳>`，并打印回滚命令。修改后需手动重启 PHP 服务。
 
 ### 版本升级
 
-**宿主机**：按包管理器生成命令（apt / dnf / yum / apk / zypper / pacman / brew），先打印计划，你选「只打印」或「由脚本执行」，执行时每条命令还会再问一次。
+**宿主机**：按包管理器生成命令（apt / dnf / yum / apk / zypper / pacman / brew），先展示计划，再逐条确认执行。
 
-**容器**：**全自动**。脚本自己找 compose 文件、改 image tag、重建、验证：
+**Docker**：自动完成以下步骤：
 
-```
-[+] 当前镜像: php:8.2.34-fpm
-[+] 目标镜像: php:8.2.35-fpm
+1. 从容器 label 读取 compose 文件路径与服务名
+2. 备份 `docker-compose.yml`
+3. 改写 `image` 行（支持浮动 tag 与固定版本）
+4. `docker compose up -d --force-recreate <service>`
+5. 重新检测版本与补丁标志
 
-检测到 compose 管理：
-  配置文件: /path/to/docker-compose.yml
-  服务名  : php-fpm
+仅支持 compose 管理的容器。`docker run` 创建的容器只输出重建指引。
 
-将要执行：
-  1. 备份 docker-compose.yml
-  2. 把 image 行 php:8.2.34-fpm → php:8.2.35-fpm
-  3. 重建服务（会拉新镜像）
-  4. 自动验证版本与补丁标志
+## 安全设计
 
-确认自动升级？ [y/N]:
-```
+| 原则       | 实现                               |
+| ---------- | ---------------------------------- |
+| 默认只读   | 不加参数运行时不做任何修改         |
+| 改动可回滚 | 所有文件修改前自动备份             |
+| 升级需确认 | 展示计划 → 选择执行方式 → 逐条确认 |
+| 凭据不落盘 | 不收集任何凭据                     |
 
-`y` 之后全自动，最后验证：
+## 限制
 
-```
-容器内输出：
-  | 8.2.35
-  | string(0) ""
-[+] 验证通过：已包含修复
-```
+以下事项不在本工具范围内：
 
-**浮动 tag 也能处理**：
+- **关闭 `session.upload_progress` 不等于修复**。该配置仅切断 CVE-2026-109619 的一条已知会话路径，对 CVE-2026-109618 的内存破坏无效。
+- **调整 `memory_limit` 不是修复**。OOM 本身即为触发条件之一；设置 `memory_limit = -1` 会使分配进入另一条失败路径，反而落入同一脆弱点。
+- **不检测应用层缺陷**。如参数拼接进 `include`、对不可信数据调用 `unserialize()`。
+- **不覆盖全部部署形态**。面板捆绑的 PHP、编译进二进制的 PHP、远程主机上的 PHP 需单独处理。
 
-| 当前镜像 | 升级后 |
-|---|---|
-| `php:8.2.34-fpm` | `php:8.2.35-fpm` |
-| `php:8.2-fpm`（浮动） | `php:8.2.35-fpm` |
-| `myrepo/php:8.4.26-custom` | `myrepo/php:8.4.27-custom` |
-
-**唯一的例外**：`docker run` 直接起的容器（非 compose）。重建需要完整的 ports / volumes / env / network 参数，猜错可能丢数据，所以只给命令不自动执行。
-
----
-
-## 三个刻意的设计
-
-**① 默认不动手** —— 不加参数跑，只检测 + 出报告 + 问你。
-
-**② 改前一定备份** —— `php.ini` 和 `docker-compose.yml` 都备份成 `.bak.<时间戳>`，回滚命令直接打印。
-
-**③ 升级不偷偷跑** —— 先看计划、再确认、执行时逐条确认；失败立即停并给回滚。
-
-**自动升级 PHP 是高危操作**，出问题影响的是线上业务。脚本能省掉「查」的力气，但「改」的决定权得留给人。
-
----
-
-## 给 CI / 监控用
-
-```bash
-# 用退出码判断
-python3 php2shell_guard.py --scan
-# 0 安全 / 1 有风险 / 2 没找到 PHP
-
-# 输出 JSON（UTF-8 无 BOM）
-python3 php2shell_guard.py --scan --json-out /var/log/php2shell.json
-
-# 跳过容器检测
-python3 php2shell_guard.py --scan --no-docker
-```
-
----
-
-## 它**不能**做什么
-
-这一节比上面都重要。
-
-**关掉 `upload_progress` 不等于修好。**
-它只切断 619 的一条已知会话路径。**618 是 OOM 引发的内存破坏，跟上传功能完全无关**，关它没用。
-
-**调小 `memory_limit` 不是修复。**
-OOM 本身就是触发条件之一。而且 `memory_limit = -1` 会让分配走内存映射失败路径，**反而进入同一条脆弱路径**（这条要特别注意）。
-
-**不检测应用层缺陷。**
-参数拼接进 `include`、对不可信数据调 `unserialize()` —— 这些得单独审代码。
-
-**不覆盖所有部署形态。**
-面板捆绑的 PHP、编译进二进制的 PHP、别的机器上的 PHP，都需要单独看。
-
-**唯一完整的修复**：**升级到 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 及以上，并重启所有 PHP 进程。**
-
----
+完整修复方式为：升级至 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 及以上，并重启所有 PHP 进程。
 
 ## 自检
 
@@ -245,20 +151,10 @@ OOM 本身就是触发条件之一。而且 `memory_limit = -1` 会让分配走�
 python3 selftest.py
 ```
 
-验证版本判定逻辑（15 个用例，含 `8.10.1` 不会被误判成 `8.1`）+ 端到端检测。
-
----
+验证版本判定逻辑（15 个用例）与端到端检测通路。
 
 ## 参考
 
-- PHP 官方安全公告：<https://www.php.net/security/>
-- GHSA-w8hw-w9fx-j79w（CVE-2026-109618）
-- GHSA-6wmf-4rv5-p3rp（CVE-2026-109619）
-
----
-
-## 许可
-
-MIT
-
-**本工具仅用于自查与防守。请勿用于未授权测试。**
+- [PHP 安全公告](https://www.php.net/security/)
+- [GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) — CVE-2026-109618
+- [GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) — CVE-2026-109619
