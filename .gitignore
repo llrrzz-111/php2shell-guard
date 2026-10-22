@@ -1,0 +1,14 @@
+﻿__pycache__/
+*.pyc
+*.log
+*.json
+out/
+reports/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+
+# 一次性推送脚本，不进仓库
+push_to_github.ps1
+gen_push.py
